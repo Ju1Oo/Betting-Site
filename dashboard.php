@@ -1,47 +1,68 @@
 <?php
 require 'db.php';
-
 session_start();
 
-// Sprawdzamy, czy użytkownik jest zalogowany
+// Sprawdzenie, czy użytkownik jest zalogowany
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
     exit();
 }
 
-$user_id = $_SESSION['user_id'];
-
-// Pobieramy dane użytkownika, w tym saldo
-$stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
-$stmt->execute([$user_id]);
+// Pobieranie salda użytkownika
+$stmt = $pdo->prepare("SELECT balance FROM users WHERE id = ?");
+$stmt->execute([$_SESSION['user_id']]);
 $user = $stmt->fetch();
 
-// Przechowujemy saldo użytkownika
-$balance = $user['balance'];
+// Jeśli użytkownik nie istnieje, przekieruj go do strony logowania
+if (!$user) {
+    header("Location: login.php");
+    exit();
+}
 
-// Pobieranie zakładów użytkownika
-$stmt = $pdo->prepare("SELECT * FROM bets WHERE user_id = ?");
-$stmt->execute([$user_id]);
+// Pobieranie aktywnych zakładów użytkownika z informacjami o drużynach
+$stmt = $pdo->prepare("
+    SELECT bets.*, matches.team_a, matches.team_b
+    FROM bets
+    JOIN matches ON bets.match_id = matches.id
+    WHERE bets.user_id = ? AND bets.status = 'oczekujący'
+");
+$stmt->execute([$_SESSION['user_id']]);
 $bets = $stmt->fetchAll();
 ?>
 <!DOCTYPE html>
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <title>Panel użytkownika</title>
+    <title>Dashboard</title>
 </head>
 <body>
-    <h1>Twoje zakłady</h1>
+    <h1>Twoje Zakłady</h1>
+    
+    <!-- Wyświetlanie liczby żetonów -->
+    <p>Aktualna liczba żetonów: <?php echo htmlspecialchars($user['balance']); ?></p>
 
-    <p>Aktualna liczba żetonów: <?php echo $balance; ?></p>
-
-    <ul>
-        <?php foreach ($bets as $bet): ?>
-            <li>Zakład ID: <?php echo $bet['id']; ?>, Mecz: <?php echo $bet['match_id']; ?>, Typ: <?php echo $bet['bet_type']; ?>, Stawka: <?php echo $bet['stake']; ?>, Potencjalna wygrana: <?php echo $bet['potential_win']; ?>, Status: <?php echo $bet['status']; ?></li>
-        <?php endforeach; ?>
-    </ul>
-
-    <a href="bet.php">Obstaw nowy zakład</a>
-    <a href="logout.php">Wyloguj</a>
+    <?php if (empty($bets)): ?>
+        <p>Nie masz żadnych aktywnych zakładów.</p>
+    <?php else: ?>
+        <table>
+            <tr>
+                <th>Mecz</th>
+                <th>Twój typ</th>
+                <th>Stawka</th>
+                <th>Potencjalna wygrana</th>
+            </tr>
+            <?php foreach ($bets as $bet): ?>
+                <tr>
+                    <td><?php echo htmlspecialchars($bet['team_a']) . " vs " . htmlspecialchars($bet['team_b']); ?></td>
+                    <td><?php echo htmlspecialchars($bet['bet_type']); ?></td>
+                    <td><?php echo htmlspecialchars($bet['stake']); ?> zł</td>
+                    <td><?php echo htmlspecialchars($bet['potential_win']); ?> zł</td>
+                </tr>
+            <?php endforeach; ?>
+        </table>
+    <?php endif; ?>
+    
+    <a href="index.php">Powrót do strony głównej</a>
+    <a href="bet.php">Stwórz nowy zakład</a>
 </body>
 </html>
