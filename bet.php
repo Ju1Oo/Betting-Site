@@ -2,95 +2,101 @@
 require 'db.php';
 
 session_start();
+
+// Sprawdzamy, czy użytkownik jest zalogowany
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
     exit();
 }
 
-// Pobranie listy dostępnych meczów z bazy danych
-$stmt = $pdo->query("SELECT id, team_a, team_b, start_time, odds_team_a, odds_draw, odds_team_b FROM matches WHERE start_time > NOW()");
-$matches = $stmt->fetchAll();
+$user_id = $_SESSION['user_id'];
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// Pobieramy dane użytkownika, w tym saldo
+$stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+$stmt->execute([$user_id]);
+$user = $stmt->fetch();
+
+// Przechowujemy saldo użytkownika
+$balance = $user['balance'];
+
+// Obsługa obstawiania zakładu
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['place_bet'])) {
     $match_id = $_POST['match_id'];
     $bet_type = $_POST['bet_type'];
     $stake = $_POST['stake'];
-    $user_id = $_SESSION['user_id'];
 
-    // Sprawdzenie, czy stawka jest poprawna
-    $stmt = $pdo->prepare("SELECT balance FROM users WHERE id = ?");
-    $stmt->execute([$user_id]);
-    $user = $stmt->fetch();
-    if ($user['balance'] < $stake) {
-        $error = "Nie masz wystarczających środków na koncie.";
-    } else {
-        // Obliczenie potencjalnej wygranej
-        $stmt = $pdo->prepare("SELECT odds_team_a, odds_draw, odds_team_b FROM matches WHERE id = ?");
+    if ($stake <= $balance) {
+        // Zaktualizuj saldo użytkownika
+        $new_balance = $balance - $stake;
+        $stmt = $pdo->prepare("UPDATE users SET balance = ? WHERE id = ?");
+        $stmt->execute([$new_balance, $user_id]);
+
+        // Oblicz potencjalną wygraną
+        $stmt = $pdo->prepare("SELECT * FROM matches WHERE id = ?");
         $stmt->execute([$match_id]);
         $match = $stmt->fetch();
 
         $odds = 0;
-        if ($bet_type === 'team_a') $odds = $match['odds_team_a'];
-        if ($bet_type === 'draw') $odds = $match['odds_draw'];
-        if ($bet_type === 'team_b') $odds = $match['odds_team_b'];
+        if ($bet_type == 'team_a') {
+            $odds = $match['odds_team_a'];
+        } elseif ($bet_type == 'draw') {
+            $odds = $match['odds_draw'];
+        } elseif ($bet_type == 'team_b') {
+            $odds = $match['odds_team_b'];
+        }
 
         $potential_win = $stake * $odds;
 
-        // Dodanie zakładu do bazy
+        // Dodaj zakład do bazy danych
         $stmt = $pdo->prepare("INSERT INTO bets (user_id, match_id, bet_type, stake, potential_win, status) VALUES (?, ?, ?, ?, ?, 'oczekujący')");
         $stmt->execute([$user_id, $match_id, $bet_type, $stake, $potential_win]);
 
-        // Aktualizacja salda użytkownika
-        $stmt = $pdo->prepare("UPDATE users SET balance = balance - ? WHERE id = ?");
-        $stmt->execute([$stake, $user_id]);
-
-        $success = "Zakład został pomyślnie złożony!";
+        $success = "Zakład został przyjęty!";
+    } else {
+        $error = "Masz za mało żetonów na ten zakład.";
     }
 }
+
+// Pobierz listę dostępnych meczów
+$stmt = $pdo->query("SELECT * FROM matches");
+$matches = $stmt->fetchAll();
 ?>
 <!DOCTYPE html>
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <title>Obstawianie meczu</title>
+    <title>Obstawianie Zakładów</title>
 </head>
 <body>
-    <h1>Obstawianie meczu</h1>
+    <h1>Obstawianie Zakładu</h1>
 
-    <?php if (!empty($error)) echo "<p style='color: red;'>$error</p>"; ?>
-    <?php if (!empty($success)) echo "<p style='color: green;'>$success</p>"; ?>
+    <p>Aktualna liczba żetonów: <?php echo $balance; ?></p>
 
-    <?php if (count($matches) > 0): ?>
-        <form method="POST">
-            <label for="match_id">Wybierz mecz:</label>
-            <select name="match_id" id="match_id" required>
+    <?php if (!empty($success)) echo "<p>$success</p>"; ?>
+    <?php if (!empty($error)) echo "<p>$error</p>"; ?>
+
+    <form method="POST">
+        <label>Wybierz mecz:
+            <select name="match_id" required>
                 <?php foreach ($matches as $match): ?>
-                    <option value="<?php echo $match['id']; ?>">
-                        <?php echo htmlspecialchars($match['team_a']) . " vs " . htmlspecialchars($match['team_b']) . " (" . $match['start_time'] . ")"; ?>
-                    </option>
+                    <option value="<?php echo $match['id']; ?>"><?php echo $match['team_a'] . " vs " . $match['team_b']; ?></option>
                 <?php endforeach; ?>
             </select>
-            <br><br>
+        </label><br>
 
-            <label for="bet_type">Rodzaj zakładu:</label>
-            <select name="bet_type" id="bet_type" required>
-                <option value="team_a">Wygrana drużyny A</option>
+        <label>Typ zakładu:
+            <select name="bet_type" required>
+                <option value="team_a">Drużyna A</option>
                 <option value="draw">Remis</option>
-                <option value="team_b">Wygrana drużyny B</option>
+                <option value="team_b">Drużyna B</option>
             </select>
-            <br><br>
+        </label><br>
 
-            <label for="stake">Stawka (żetony):</label>
-            <input type="number" name="stake" id="stake" min="1" required>
-            <br><br>
+        <label>Stawka: <input type="number" step="0.01" name="stake" required></label><br>
 
-            <button type="submit">Obstaw zakład</button>
-        </form>
-    <?php else: ?>
-        <p>Obecnie brak dostępnych meczów do obstawienia.</p>
-    <?php endif; ?>
+        <button type="submit" name="place_bet">Postaw zakład</button>
+    </form>
 
-    <br>
-    <a href="dashboard.php">Powrót do panelu użytkownika</a>
+    <a href="index.php">Powrót do strony głównej</a>
 </body>
 </html>
